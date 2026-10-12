@@ -139,10 +139,14 @@ NOMBRE = {"edad_conductor_cat":"edad", "nivel_bonus_cat":"nivel de bonus", "pote
           "antiguedad_vehiculo_cat":"antigüedad", "cobertura":"cobertura", "sexo":"sexo",
           "combustible":"combustible", "uso":"uso"}
 
+MIN_POLIZAS = 30     # mínimo de pólizas para confiar en el segmento (también activa el ⚠️)
+
 def cotizar_empirico(d, p):
     """Prima pura empírica del segmento del perfil (mismos 8 factores que el GLM).
-    Si ese segmento no tiene exposición, relaja primero bonus, luego potencia y luego
-    antigüedad, para devolver siempre una prima. Devuelve (prima, nº pólizas, nota)."""
+    Si el segmento tiene monto 0 o menos de MIN_POLIZAS pólizas, relaja primero bonus,
+    luego potencia y luego antigüedad, para devolver una prima creíble.
+    Devuelve (prima, nº pólizas, nota)."""
+    ultimo = None                              # respaldo: el segmento más amplio con exposición
     niveles = {"edad_conductor_cat": banda("edad_conductor", p["edad_conductor"]),
                "cobertura": p["cobertura"], "sexo": p["sexo"], "uso": p["uso"],
                "combustible": p["combustible"],
@@ -156,11 +160,15 @@ def cotizar_empirico(d, p):
             mask &= d[c] == niveles[c]
         seg = d[mask]
         expo = seg["exposicion"].sum()
-        if expo > 0:
-            nota = "" if k == len(orden) else \
-                " · sin filtrar por " + ", ".join(NOMBRE[c] for c in orden[k:])
-            return seg["monto_total"].sum() / expo, len(seg), nota
-    return np.nan, 0, ""
+        if expo <= 0:
+            continue
+        monto = seg["monto_total"].sum()
+        nota = "" if k == len(orden) else \
+            " · sin filtrar por " + ", ".join(NOMBRE[c] for c in orden[k:])
+        ultimo = (monto / expo, len(seg), nota)
+        if monto > 0 and len(seg) >= MIN_POLIZAS:
+            return ultimo
+    return ultimo if ultimo is not None else (np.nan, 0, "")
 
 def cotizar_glm(p, m_freq, m_sev, m_agg):
     row = pd.DataFrame([{"edad_conductor_cat": banda("edad_conductor", p["edad_conductor"]),
@@ -336,7 +344,7 @@ with tab_cotiza:
             with st.container(border=True):
                 st.caption("1 · Empírico (segmento)")
                 st.metric("Prima pura", "—" if np.isnan(pp_emp) else f"${pp_emp:,.2f}")
-                st.caption(f"{n:,} pólizas{nota_emp}" + ("  ⚠️ poco creíble" if n < 100 else ""))
+                st.caption(f"{n:,} pólizas{nota_emp}" + ("  ⚠️ poco creíble" if n < MIN_POLIZAS else ""))
         with k2:
             with st.container(border=True):
                 st.caption("2 · GLM (modelo)")
